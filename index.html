@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>報到</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: #f7f6f2;
+    margin: 0;
+    padding: 24px 16px;
+    color: #2c2c2a;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 28px 20px;
+    max-width: 420px;
+    margin: 0 auto;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    text-align: center;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  p { font-size: 14px; color: #666; line-height: 1.6; margin: 0 0 20px; }
+  select {
+    width: 100%;
+    padding: 12px;
+    font-size: 15px;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    margin-bottom: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 10px;
+    background: #0F6E56;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:disabled { background: #ccc; }
+  .course-box {
+    background: #E1F5EE;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+    text-align: left;
+  }
+  .course-box .name { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .course-box .meta { font-size: 13px; color: #555; }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    text-align: left;
+  }
+  .success-icon {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: #E1F5EE; color: #0F6E56;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; margin: 0 auto 16px;
+  }
+  .hidden { display: none; }
+  .course-option {
+    display: block;
+    text-align: left;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  .course-option.selected { border-color: #0F6E56; background: #E1F5EE; }
+  .course-option .name { font-size: 15px; font-weight: 600; }
+  .course-option .meta { font-size: 12px; color: #666; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="card" id="loading">
+  <p>讀取中，請稍候...</p>
+</div>
+
+<div class="card hidden" id="bind-screen">
+  <h1>第一次使用，請確認您的姓名</h1>
+  <p>之後報到會自動記住，不用再選一次</p>
+  <select id="name-select"></select>
+  <button onclick="submitBind()">確認姓名</button>
+</div>
+
+<div class="card hidden" id="checkin-screen">
+  <h1 id="greeting"></h1>
+  <p id="hint" class="hidden"></p>
+  <div id="course-area"></div>
+  <div class="checkbox-row hidden" id="makeup-row">
+    <input type="checkbox" id="makeup-check">
+    <label for="makeup-check">這是補課</label>
+  </div>
+  <button id="submit-btn" onclick="submitCheckIn()">確認報到</button>
+</div>
+
+<div class="card hidden" id="no-course-screen">
+  <h1>目前沒有進行中的課程</h1>
+  <p>請確認報到時間，或聯繫老師確認課程資訊</p>
+</div>
+
+<div class="card hidden" id="success-screen">
+  <div class="success-icon">✓</div>
+  <h1>報到成功</h1>
+  <p id="success-detail"></p>
+</div>
+
+<script>
+// ★ 這是LINE Developers給的LIFF ID
+const LIFF_ID = '2009896365-T8tkvwVG';
+
+// ★ 這是Apps Script部署後的網址（結尾/exec），當作資料庫API使用
+const API_BASE = 'https://script.google.com/macros/s/AKfycbzeQww1F1vPjqdkf5KAhTh7FXw3qPBiteobV31_M752y1huEK6hhCm2YBFq3xdRVuM/exec';
+
+let lineUserId = '';
+let displayName = '';
+let studentName = '';
+let selectedCourse = null;
+let courseOptions = [];
+
+function show(id) {
+  ['loading','bind-screen','checkin-screen','no-course-screen','success-screen']
+    .forEach(s => document.getElementById(s).classList.toggle('hidden', s !== id));
+}
+
+function setStatus(text) {
+  const el = document.getElementById('loading');
+  if (el && !el.classList.contains('hidden')) {
+    el.innerHTML = '<p>' + text + '</p>';
+  }
+}
+
+function onDebugError(err) {
+  show('loading');
+  document.getElementById('loading').innerHTML =
+    '<p style="color:#c0392b; text-align:left; white-space:pre-wrap;">發生錯誤，請把這段截圖給Claude：\n\n' +
+    (err && err.message ? err.message : JSON.stringify(err)) + '</p>';
+}
+
+// 呼叫Apps Script API（用fetch，不再用google.script.run，因為前端已經搬出Apps Script了）
+function apiCall(action, params) {
+  params = params || {};
+  params.action = action;
+  const qs = Object.keys(params)
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
+    .join('&');
+  return fetch(API_BASE + '?' + qs)
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.error) throw new Error(data.error);
+      return data;
+    });
+}
+
+async function init() {
+  try {
+    setStatus('步驟1：檢查設定...');
+    const cleanId = LIFF_ID.trim();
+    if (!/^[0-9]+-[A-Za-z0-9]+$/.test(cleanId)) {
+      onDebugError({ message: 'LIFF_ID 格式看起來不對，請用鍵盤手動打一次這組ID，不要用複製貼上。' });
+      return;
+    }
+    if (!API_BASE || API_BASE.indexOf('/exec') === -1) {
+      onDebugError({ message: 'API_BASE 還沒有填成Apps Script部署的網址（結尾/exec）。' });
+      return;
+    }
+
+    setStatus('步驟2：liff.init() 執行中...');
+    await liff.init({ liffId: cleanId });
+    setStatus('步驟3：liff.init() 完成，檢查登入狀態...');
+    if (!liff.isLoggedIn()) {
+      setStatus('步驟4：尚未登入，呼叫 liff.login()...');
+      liff.login();
+      return;
+    }
+    setStatus('步驟5：已登入，取得LINE個人資料...');
+    const profile = await liff.getProfile();
+    lineUserId = profile.userId;
+    displayName = profile.displayName;
+
+    setStatus('步驟6：正在連線Google試算表...');
+    const result = await apiCall('checkBinding', { userId: lineUserId });
+    onBindingResult(result);
+  } catch (err) {
+    onDebugError(err);
+  }
+}
+
+setTimeout(function() {
+  const el = document.getElementById('loading');
+  if (el && !el.classList.contains('hidden') && !el.querySelector('p[style]')) {
+    const lastStep = el.textContent.trim();
+    onDebugError({ message: '超過8秒沒有回應。最後停在這個步驟：\n「' + lastStep + '」\n這步驟本身沒有丟出錯誤，但也沒有完成。' });
+  }
+}, 8000);
+
+function onBindingResult(result) {
+  if (result.bound) {
+    studentName = result.name;
+    loadCurrentCourse();
+  } else {
+    const select = document.getElementById('name-select');
+    select.innerHTML = result.studentList.map(n => `<option value="${n}">${n}</option>`).join('');
+    show('bind-screen');
+  }
+}
+
+function submitBind() {
+  const name = document.getElementById('name-select').value;
+  apiCall('bindStudent', { userId: lineUserId, displayName: displayName, studentName: name })
+    .then(res => {
+      studentName = res.name;
+      loadCurrentCourse();
+    })
+    .catch(onDebugError);
+}
+
+function loadCurrentCourse() {
+  show('loading');
+  setStatus('讀取課程資料中...');
+  apiCall('getCurrentCourse', { studentName: studentName })
+    .then(onCourseResult)
+    .catch(onDebugError);
+}
+
+function onCourseResult(result) {
+  if (!result.found) {
+    show('no-course-screen');
+    return;
+  }
+
+  document.getElementById('greeting').textContent = studentName + '，您好';
+  const area = document.getElementById('course-area');
+  const makeupRow = document.getElementById('makeup-row');
+  const hint = document.getElementById('hint');
+  courseOptions = result.courses;
+
+  if (result.mode === 'single') {
+    selectedCourse = courseOptions[0];
+    area.innerHTML = courseBoxHtml(selectedCourse);
+    makeupRow.classList.add('hidden');
+    hint.classList.add('hidden');
+    document.getElementById('makeup-check').checked = false;
+
+  } else if (result.mode === 'choose') {
+    hint.textContent = '您報名了多堂課程，請選擇要報到的課程';
+    hint.classList.remove('hidden');
+    area.innerHTML = courseOptions.map((c, i) => courseOptionHtml(c, i, i === 0)).join('');
+    selectedCourse = courseOptions[0];
+    makeupRow.classList.add('hidden');
+    document.getElementById('makeup-check').checked = false;
+
+  } else if (result.mode === 'makeup') {
+    hint.textContent = '這不是您平常報名的課程時段，請選擇目前進行中的課程';
+    hint.classList.remove('hidden');
+    area.innerHTML = courseOptions.map((c, i) => courseOptionHtml(c, i, i === 0)).join('');
+    selectedCourse = courseOptions[0];
+    makeupRow.classList.remove('hidden');
+    document.getElementById('makeup-check').checked = true;
+  }
+
+  show('checkin-screen');
+}
+
+function courseBoxHtml(c) {
+  return `<div class="course-box">
+    <div class="name">${c.name}</div>
+    <div class="meta">老師：${c.teacher}</div>
+  </div>`;
+}
+
+function courseOptionHtml(c, index, selected) {
+  return `<div class="course-option${selected ? ' selected' : ''}" onclick="selectCourse(${index}, this)">
+    <div class="name">${c.name}</div>
+    <div class="meta">老師：${c.teacher}</div>
+  </div>`;
+}
+
+function selectCourse(index, el) {
+  document.querySelectorAll('.course-option').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedCourse = courseOptions[index];
+}
+
+function submitCheckIn() {
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = '送出中...';
+  const makeup = document.getElementById('makeup-check').checked;
+  apiCall('submitCheckIn', {
+    studentName: studentName,
+    courseCode: selectedCourse.code,
+    courseName: selectedCourse.name,
+    teacher: selectedCourse.teacher,
+    isMakeup: makeup
+  }).then(onCheckInSuccess).catch(onDebugError);
+}
+
+function onCheckInSuccess(res) {
+  document.getElementById('success-detail').textContent =
+    res.time + '　' + res.course + (res.note ? '（' + res.note + '）' : '');
+  show('success-screen');
+}
+
+init();
+</script>
+</body>
+</html>
