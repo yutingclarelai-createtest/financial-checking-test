@@ -90,9 +90,10 @@
 </div>
 
 <div class="card hidden" id="bind-screen">
-  <h1>第一次使用，請確認您的姓名</h1>
-  <p>之後報到會自動記住，不用再選一次</p>
-  <select id="name-select"></select>
+  <h1>第一次使用，請輸入您的姓名</h1>
+  <p>請輸入報名時填寫的姓名，之後報到會自動記住，不用再輸入一次</p>
+  <input type="text" id="name-input" placeholder="請輸入您的姓名" style="width:100%; padding:12px; font-size:15px; border-radius:8px; border:1px solid #ddd; margin-bottom:8px; box-sizing:border-box;">
+  <p id="bind-error" class="hidden" style="color:#c0392b; text-align:left; margin-top:0; margin-bottom:16px; font-size:13px;"></p>
   <button onclick="submitBind()">確認姓名</button>
 </div>
 
@@ -212,16 +213,27 @@ function onBindingResult(result) {
     studentName = result.name;
     loadCurrentCourse();
   } else {
-    const select = document.getElementById('name-select');
-    select.innerHTML = result.studentList.map(n => `<option value="${n}">${n}</option>`).join('');
     show('bind-screen');
   }
 }
 
 function submitBind() {
-  const name = document.getElementById('name-select').value;
+  const nameInput = document.getElementById('name-input');
+  const errorEl = document.getElementById('bind-error');
+  const name = nameInput.value.trim();
+  if (!name) {
+    errorEl.textContent = '請輸入姓名';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  errorEl.classList.add('hidden');
   apiCall('bindStudent', { userId: lineUserId, displayName: displayName, studentName: name })
     .then(res => {
+      if (res.success === false) {
+        errorEl.textContent = res.reason || '找不到這個姓名的報名資料';
+        errorEl.classList.remove('hidden');
+        return;
+      }
       studentName = res.name;
       loadCurrentCourse();
     })
@@ -312,6 +324,13 @@ function submitCheckIn() {
 function onCheckInSuccess(res) {
   document.getElementById('success-detail').textContent =
     res.time + '　' + res.course + (res.note ? '（' + res.note + '）' : '');
+  if (res.paymentDue && res.paymentMessage) {
+    const warn = document.createElement('p');
+    warn.style.color = '#c0392b';
+    warn.style.marginTop = '12px';
+    warn.textContent = '⚠️ ' + res.paymentMessage;
+    document.getElementById('success-screen').appendChild(warn);
+  }
   show('success-screen');
 }
 
