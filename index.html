@@ -114,11 +114,24 @@ button:disabled { background: #ccc; }
   </div>
   <button id="submit-btn" onclick="submitCheckIn()">確認報到</button>
   <button id="leave-btn" class="leave-btn hidden" onclick="submitLeave()">今天請假</button>
+  <p id="makeup-leave-entry" class="hidden" style="margin-top:14px; margin-bottom:0;">
+    這不是我的課，<a href="javascript:void(0)" onclick="openLeaveFlow()" style="color:#0F6E56; font-weight:600;">我要幫我原本的課請假</a>
+  </p>
 </div>
 
 <div class="card hidden" id="no-course-screen">
   <h1>目前沒有進行中的課程</h1>
   <p>請確認報到時間，或聯繫老師確認課程資訊</p>
+  <button class="leave-btn" onclick="openLeaveFlow()">我要請假</button>
+</div>
+
+<div class="card hidden" id="leave-screen">
+  <h1>請假</h1>
+  <p id="leave-hint">請選擇要請假的課程</p>
+  <div id="leave-course-area"></div>
+  <p id="leave-error" class="hidden" style="color:#c0392b; text-align:left; margin-top:0;"></p>
+  <button id="leave-confirm-btn" onclick="confirmLeave()">確認請假</button>
+  <button class="leave-btn" onclick="backFromLeave()">返回</button>
 </div>
 
 <div class="card hidden" id="success-screen">
@@ -139,9 +152,12 @@ let displayName = '';
 let studentName = '';
 let selectedCourse = null;
 let courseOptions = [];
+let leaveCourseOptions = [];
+let leaveSelectedCourse = null;
+let leaveReturnScreen = 'no-course-screen'; // 請假畫面按「返回」要回到哪一頁
 
 function show(id) {
-  ['loading','bind-screen','checkin-screen','no-course-screen','success-screen']
+  ['loading','bind-screen','checkin-screen','no-course-screen','leave-screen','success-screen']
     .forEach(s => document.getElementById(s).classList.toggle('hidden', s !== id));
 }
 
@@ -295,9 +311,13 @@ function onCourseResult(result) {
     selectedCourse = courseOptions[0];
     makeupRow.classList.remove('hidden');
     document.getElementById('makeup-check').checked = true;
-    // 補課模式代表現在跑的課不是學員自己報名的課，這種情況下不能對這門課請假
+    // 補課模式代表現在跑的課不是學員自己報名的課，不能對「現在這門課」請假，
+    // 但學員還是可能想幫自己原本報名的課請假，所以改顯示另一個入口
     leaveBtn.classList.add('hidden');
   }
+
+  const makeupLeaveEntry = document.getElementById('makeup-leave-entry');
+  makeupLeaveEntry.classList.toggle('hidden', result.mode !== 'makeup');
 
   show('checkin-screen');
 }
@@ -378,6 +398,73 @@ function onLeaveSuccess(res) {
   document.getElementById('success-detail').textContent =
     res.time + ' ' + res.course + '（請假）';
   show('success-screen');
+}
+
+// ------------------ 獨立的「請假」流程：不限現在是不是上課時間 ------------------
+// 進入點：目前沒有進行中的課程」畫面的「我要請假」按鈕，
+// 或「這不是我的課」畫面的「我要幫我原本的課請假」連結
+function openLeaveFlow() {
+  leaveReturnScreen = document.getElementById('checkin-screen').classList.contains('hidden')
+    ? 'no-course-screen' : 'checkin-screen';
+
+  show('loading');
+  setStatus('讀取您報名的課程中...');
+  apiCall('getEnrolledCoursesForLeave', { studentName: studentName })
+    .then(onLeaveCoursesResult)
+    .catch(onDebugError);
+}
+
+function onLeaveCoursesResult(result) {
+  leaveCourseOptions = result.courses || [];
+  const area = document.getElementById('leave-course-area');
+  const hint = document.getElementById('leave-hint');
+  const errorEl = document.getElementById('leave-error');
+  const confirmBtn = document.getElementById('leave-confirm-btn');
+  errorEl.classList.add('hidden');
+
+  if (leaveCourseOptions.length === 0) {
+    hint.textContent = '查不到您報名的課程，請聯繫老師確認課程資訊';
+    area.innerHTML = '';
+    leaveSelectedCourse = null;
+    confirmBtn.disabled = true;
+  } else if (leaveCourseOptions.length === 1) {
+    hint.textContent = '請確認要請假的課程';
+    leaveSelectedCourse = leaveCourseOptions[0];
+    area.innerHTML = courseBoxHtml(leaveSelectedCourse);
+    confirmBtn.disabled = false;
+  } else {
+    hint.textContent = '您報名了多堂課程，請選擇要請假的課程';
+    leaveSelectedCourse = leaveCourseOptions[0];
+    area.innerHTML = leaveCourseOptions.map((c, i) => courseOptionHtml(c, i, i === 0))
+      .join('').replace(/onclick="selectCourse\((\d+), this\)"/g, 'onclick="selectLeaveCourse($1, this)"');
+    confirmBtn.disabled = false;
+  }
+
+  show('leave-screen');
+}
+
+function selectLeaveCourse(index, el) {
+  document.querySelectorAll('#leave-course-area .course-option').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  leaveSelectedCourse = leaveCourseOptions[index];
+}
+
+function confirmLeave() {
+  if (!leaveSelectedCourse) return;
+  const btn = document.getElementById('leave-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = '送出中...';
+
+  apiCall('submitLeave', {
+    studentName: studentName,
+    courseCode: leaveSelectedCourse.code,
+    courseName: leaveSelectedCourse.name,
+    teacher: leaveSelectedCourse.teacher
+  }).then(onLeaveSuccess).catch(onDebugError);
+}
+
+function backFromLeave() {
+  show(leaveReturnScreen);
 }
 
 init();
