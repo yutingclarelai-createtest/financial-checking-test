@@ -114,9 +114,7 @@ button:disabled { background: #ccc; }
   </div>
   <button id="submit-btn" onclick="submitCheckIn()">確認報到</button>
   <button id="leave-btn" class="leave-btn hidden" onclick="submitLeave()">今天請假</button>
-  <p id="makeup-leave-entry" class="hidden" style="margin-top:14px; margin-bottom:0;">
-    這不是我的課，<a href="javascript:void(0)" onclick="openLeaveFlow()" style="color:#0F6E56; font-weight:600;">我要幫我原本的課請假</a>
-  </p>
+  <button id="makeup-leave-entry" class="leave-btn hidden" onclick="openLeaveFlow()">這不是我的課，我要幫我原本的課請假</button>
 </div>
 
 <div class="card hidden" id="no-course-screen">
